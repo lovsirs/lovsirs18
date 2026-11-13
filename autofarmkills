@@ -1,0 +1,414 @@
+local burger  = game:GetService("Players")
+local fries   = game:GetService("RunService")
+local nuggets = game:GetService("UserInputService")
+local taco    = game:GetService("VirtualInputManager")
+local donut   = game:GetService("ReplicatedStorage")
+
+local pizza = burger.LocalPlayer
+local isMobile = nuggets.TouchEnabled and not nuggets.KeyboardEnabled
+local nachos = donut.Remotes.ArenaRemotes.Arena
+
+local pretzel = (getgenv and getgenv().autofarm) or {}
+
+local function same(a, b)
+    return type(a) == "string" and type(b) == "string" and a:lower() == b:lower()
+end
+
+local function findPlayer(name)
+    for _, plr in burger:GetPlayers() do
+        if same(plr.Name, name) then return plr end
+    end
+end
+
+local altList = pretzel.alts or (pretzel.alt and { pretzel.alt }) or {}
+
+local function altSlot(name)
+    for i, n in altList do
+        if same(n, name) then return i end
+    end
+end
+
+local mySlot = altSlot(pizza.Name)
+local role = (same(pizza.Name, pretzel.killer) and "killer")
+    or (mySlot and "alt")
+    or nil
+
+if not role then
+    warn("autofarm: account isn't killer or alt, running base script only (join + platform)")
+end
+
+local function inArena()
+    return pizza:GetAttribute("InArena") == true
+end
+
+local function getRoot()
+    local char = pizza.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+        or char:WaitForChild("HumanoidRootPart", 5)
+end
+
+local cookie = Instance.new("Part")
+cookie.Name = "SafePlatform"
+cookie.Size = Vector3.new(500, 2, 500)
+cookie.Anchored = true
+cookie.CanCollide = true
+cookie.Transparency = 0.5
+cookie.Position = Vector3.new(0, 50000, 0)
+cookie.Parent = workspace
+
+local function tpToPlatform()
+    local root = getRoot()
+    if not root then return false end
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.CFrame = cookie.CFrame * CFrame.new(0, cookie.Size.Y / 2 + 4, 0)
+    return true
+end
+
+local function equipGun()
+    local char = pizza.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if char:FindFirstChild("SP") then return end
+    local bp = pizza:FindFirstChild("Backpack")
+    local tool = bp and bp:FindFirstChild("SP")
+    if tool then hum:EquipTool(tool) end
+end
+
+local function isAds()
+    local char = pizza.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not animator then return false end
+    for _, track in animator:GetPlayingAnimationTracks() do
+        local id = track.Animation and track.Animation.AnimationId or ""
+        for _, aid in { "138061970903623", "114254042645240" } do
+            if string.find(id, aid, 1, true) then return true end
+        end
+    end
+    return false
+end
+
+local hotdog, waffle, sundae
+local startTime = nil
+local kills = 0
+local killTimes = {}
+
+local function fmtTime(s)
+    s = math.floor(s)
+    local h  = math.floor(s / 3600)
+    local m  = math.floor((s % 3600) / 60)
+    local ss = s % 60
+    if h > 0 then return string.format("%02d:%02d:%02d", h, m, ss) end
+    return string.format("%02d:%02d", m, ss)
+end
+
+local function killsPerHour()
+    if not startTime then return 0 end
+    local now = os.clock()
+    while killTimes[1] and now - killTimes[1] > 60 do
+        table.remove(killTimes, 1)
+    end
+    local span = math.clamp(now - startTime, 10, 60)
+    return #killTimes / span * 3600
+end
+
+local function updateHud()
+    if not sundae then return end
+    local elapsed = startTime and (os.clock() - startTime) or 0
+    sundae.Text = string.format(
+        "Time: %s | Kills: %d | %d/hr",
+        fmtTime(elapsed), kills, math.floor(killsPerHour() + 0.5)
+    )
+end
+
+if role == "killer" then
+    hotdog = Instance.new("ScreenGui")
+    hotdog.Name = "AdsWarning"
+    hotdog.ResetOnSpawn = false
+    hotdog.IgnoreGuiInset = true
+    hotdog.Parent = (gethui and gethui()) or pizza:WaitForChild("PlayerGui")
+
+    waffle = Instance.new("TextLabel")
+    waffle.Size = UDim2.fromScale(1, 0.08)
+    waffle.Position = UDim2.fromScale(0, 0.12)
+    waffle.BackgroundTransparency = 1
+    waffle.Text = "click scope/ads button"
+    waffle.TextColor3 = Color3.fromRGB(255, 60, 60)
+    waffle.TextStrokeTransparency = 0
+    waffle.TextScaled = true
+    waffle.Font = Enum.Font.GothamBold
+    waffle.Visible = false
+    waffle.Parent = hotdog
+
+    sundae = Instance.new("TextLabel")
+    sundae.Size = UDim2.fromScale(1, 0.05)
+    sundae.Position = UDim2.fromScale(0, 0.02)
+    sundae.BackgroundTransparency = 1
+    sundae.Text = "Time: 00:00 | Kills: 0 | 0/hr"
+    sundae.TextColor3 = Color3.fromRGB(255, 255, 255)
+    sundae.TextStrokeTransparency = 0
+    sundae.TextScaled = true
+    sundae.Font = Enum.Font.GothamBold
+    sundae.Parent = hotdog
+
+    task.spawn(function()
+        while true do
+            updateHud()
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function mouse2(down)
+    if down then
+        if mouse2press then mouse2press() return end
+    else
+        if mouse2release then mouse2release() return end
+    end
+    local p = nuggets:GetMouseLocation()
+    taco:SendMouseButtonEvent(p.X, p.Y, 1, down, game, 0)
+end
+
+local holding = false
+local notAdsSince = nil
+
+if role == "killer" then
+    task.spawn(function()
+        while true do
+            task.wait(0.1)
+            local char = pizza.Character
+            local tool = char and char:FindFirstChild("SP")
+
+            if not tool then
+                waffle.Visible = false
+                notAdsSince = nil
+                if holding then holding = false; mouse2(false) end
+            elseif isAds() then
+                waffle.Visible = false
+                notAdsSince = nil
+            elseif isMobile then
+                waffle.Visible = true
+            else
+                waffle.Visible = false
+                notAdsSince = notAdsSince or os.clock()
+                if not holding or os.clock() - notAdsSince > 0.6 then
+                    if holding then mouse2(false) end
+                    mouse2(true)
+                    holding = true
+                    notAdsSince = os.clock()
+                end
+            end
+        end
+    end)
+end
+
+nachos:FireServer({
+    action = "join",
+    arenaType = "haunted",
+})
+
+task.spawn(function()
+    while not tpToPlatform() do
+        task.wait(0.5)
+    end
+end)
+
+local function keepPosition()
+    if role ~= "alt" and not inArena() then return end
+    local char = pizza.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if role == "alt" then
+        local kp = findPlayer(pretzel.killer)
+        local kroot = kp and kp.Character and kp.Character:FindFirstChild("HumanoidRootPart")
+        if kroot then
+            local side = (mySlot - (#altList + 1) / 2) * 4
+            local spot = (kroot.CFrame * CFrame.new(side, 0, -10)).Position
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = CFrame.lookAt(spot, kroot.Position)
+        elseif root.Position.Y < 4950 then
+            tpToPlatform()
+        end
+    elseif root.Position.Y < 4950 then
+        tpToPlatform()
+    end
+end
+
+fries.PreSimulation:Connect(keepPosition)
+fries.Heartbeat:Connect(keepPosition)
+
+pizza.CharacterAdded:Connect(function(char)
+    char:WaitForChild("HumanoidRootPart")
+    keepPosition()
+end)
+
+if role == "alt" then
+    fries.Heartbeat:Connect(function()
+        local char = pizza.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            hum.Jump = true
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+
+    pcall(function() fries:UnbindFromRenderStep("AltSpectate") end)
+    fries:BindToRenderStep("AltSpectate", Enum.RenderPriority.Camera.Value + 1, function()
+        local kp = findPlayer(pretzel.killer)
+        local kroot = kp and kp.Character and kp.Character:FindFirstChild("HumanoidRootPart")
+        if not kroot then return end
+        local cam = workspace.CurrentCamera
+        if cam.CameraType ~= Enum.CameraType.Scriptable then
+            cam.CameraType = Enum.CameraType.Scriptable
+        end
+        local target = kroot.Position + Vector3.new(0, 1, 0)
+        local behind = kroot.Position - kroot.CFrame.LookVector * 12 + Vector3.new(0, 6, 0)
+        cam.CFrame = CFrame.lookAt(behind, target)
+    end)
+end
+
+local function onSurface(plr)
+    local char = plr.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not (hum and hum.Health > 0) then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    return root.Position.Y >= 4950
+end
+
+if role == "killer" then
+    local function pickTarget()
+        local kroot = pizza.Character and pizza.Character:FindFirstChild("HumanoidRootPart")
+        local best, bestDist
+        for _, name in altList do
+            local plr = findPlayer(name)
+            local char = plr and plr.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if hum and root and hum.Health > 0 then
+                local d = kroot and (kroot.Position - root.Position).Magnitude or 0
+                if not bestDist or d < bestDist then
+                    best, bestDist = char, d
+                end
+            end
+        end
+        return best
+    end
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local getRayDirections = require(donut:WaitForChild("Blaster"):WaitForChild("Utility"):WaitForChild("getRayDirections"))
+            local old; old = hookfunction(getRayDirections, newcclosure(function(originCFrame, count, spread, seed)
+                local target = pickTarget()
+                local head = target and target:FindFirstChild("Head")
+                if head then
+                    local dir = head.Position - originCFrame.Position
+                    if dir.Magnitude > 0.001 then
+                        local unit = dir.Unit
+                        local out = table.create(count)
+                        for i = 1, count do out[i] = unit end
+                        return out
+                    end
+                end
+                return old(originCFrame, count, spread, seed)
+            end))
+        end)
+        if not ok then warn("autofarm aim hook failed:", err) end
+    end)
+
+    local function click(down)
+        if isMobile then return end
+        if down then
+            if mouse1press then mouse1press() return end
+        else
+            if mouse1release then mouse1release() return end
+        end
+        local p = nuggets:GetMouseLocation()
+        taco:SendMouseButtonEvent(p.X, p.Y, 0, down, game, 0)
+    end
+
+    local firing = false
+    local function fireTool()
+        if firing then return end
+        local char = pizza.Character
+        local tool = char and (char:FindFirstChild("SP") or char:FindFirstChildOfClass("Tool"))
+        if not tool then return end
+
+        firing = true
+        task.spawn(function()
+            click(true)
+            pcall(function() tool:Activate() end)
+            for _ = 1, 3 do fries.RenderStepped:Wait() end
+            click(false)
+            pcall(function() tool:Deactivate() end)
+            firing = false
+        end)
+    end
+
+    local lastFire = 0
+    pcall(function() fries:UnbindFromRenderStep("AutoShoot") end)
+    fries:BindToRenderStep("AutoShoot", Enum.RenderPriority.First.Value, function()
+        local now = os.clock()
+        if now - lastFire < 0.1 then return end
+        if not pickTarget() then return end
+
+        local char = pizza.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not (hum and hum.Health > 0) then return end
+
+        if not char:FindFirstChild("SP") then
+            equipGun()
+            return
+        end
+
+        lastFire = now
+        fireTool()
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if inArena() then equipGun() end
+        end
+    end)
+
+    for _, name in altList do
+        task.spawn(function()
+            local ap = findPlayer(name)
+            while not ap do
+                task.wait(0.5)
+                ap = findPlayer(name)
+            end
+
+            while true do
+                local char = ap.Character or ap.CharacterAdded:Wait()
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                    or char:WaitForChild("Humanoid", 10)
+                if hum then
+                    hum.Died:Once(function()
+                        if not onSurface(pizza) then return end
+                        local kr = pizza.Character and pizza.Character:FindFirstChild("HumanoidRootPart")
+                        local ar = char:FindFirstChild("HumanoidRootPart")
+                        if kr and ar and (kr.Position - ar.Position).Magnitude <= 100 then
+                            kills += 1
+                            startTime = startTime or os.clock()
+                            table.insert(killTimes, os.clock())
+                            updateHud()
+                        end
+                    end)
+                    while ap.Character == char do
+                        task.wait(0.2)
+                    end
+                else
+                    task.wait(0.5)
+                end
+            end
+        end)
+    end
+
+    task.spawn(equipGun)
+    pizza.CharacterAdded:Connect(equipGun)
+end
